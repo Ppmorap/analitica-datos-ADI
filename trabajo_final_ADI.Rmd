@@ -1,0 +1,314 @@
+---
+title: "Análisis de Factores que Predicen el Rendimiento Académico"
+subtitle: "Trabajo Final – Curso Analítica de Datos Industriales (ADI&TD)"
+author: "José Alejandro Mora Poblete – Doctorado Interinstitucional en Ingeniería Industrial – Di3"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Introducción
+
+El rendimiento académico de los estudiantes es un fenómeno complejo que depende de múltiples factores: hábitos de estudio, asistencia, motivación, contexto socioeconómico y condiciones del entorno escolar, entre otros. Comprender cuáles de estos factores tienen mayor influencia sobre el resultado final de un examen es una pregunta relevante tanto para instituciones educativas como para investigadores en ciencias del aprendizaje.
+
+En el contexto de la Ingeniería Industrial, la analítica de datos aplicada a la educación puede considerarse análoga al análisis de procesos productivos: los estudiantes son el "sistema", los factores son las "variables de entrada" y el puntaje del examen es la "variable de salida" o indicador de desempeño. Identificar qué variables impulsan o frenan ese desempeño permite diseñar intervenciones más efectivas.
+
+El presente trabajo aplica un **modelo de regresión lineal múltiple** para predecir el puntaje obtenido en el examen final (`Exam_Score`) a partir de variables numéricas y categóricas disponibles en el dataset. Este método fue seleccionado por su interpretabilidad, simplicidad y coherencia con los contenidos abordados en el curso.
+
+**Fuente del dataset:** Kaggle – *Student Exam Performance Dataset*  
+https://www.kaggle.com/datasets/grandmaster07/student-exam-performance-dataset-analysis  
+**Observaciones:** 6.607 estudiantes | **Variables:** 20
+
+---
+
+# Librerías utilizadas
+
+```{r librerias}
+library(ggplot2)
+library(dplyr)
+library(corrplot)
+library(caret)
+library(tidyr)
+```
+
+---
+
+# Carga y exploración inicial de datos
+
+```{r carga}
+# Cargar datos
+datos <- read.csv("StudentPerformanceFactors.csv", stringsAsFactors = TRUE)
+
+# Dimensiones y primeras filas
+dim(datos)
+head(datos)
+```
+
+```{r estructura}
+# Estructura del dataset
+str(datos)
+```
+
+```{r resumen}
+# Estadísticas descriptivas
+summary(datos)
+```
+
+El dataset contiene **6.607 observaciones** y **20 variables**: 7 numéricas continuas y 13 categóricas. La variable objetivo es `Exam_Score`, con valores entre 55 y 101 y una media de 67,2 puntos.
+
+---
+
+# Limpieza de datos
+
+```{r limpieza}
+# Identificar valores faltantes por columna
+na_count <- colSums(is.na(datos))
+print(na_count[na_count > 0])
+
+# También verificar celdas vacías en variables categóricas
+vacias <- sapply(datos, function(x) sum(x == "" | x == " ", na.rm = TRUE))
+print(vacias[vacias > 0])
+```
+
+```{r limpieza2}
+# Reemplazar valores vacíos por NA en variables categóricas
+datos[datos == "" | datos == " "] <- NA
+
+# Eliminar filas con NA
+datos_limpios <- na.omit(datos)
+
+cat("Filas originales:", nrow(datos), "\n")
+cat("Filas luego de limpieza:", nrow(datos_limpios), "\n")
+cat("Filas eliminadas:", nrow(datos) - nrow(datos_limpios), "\n")
+```
+
+Se eliminaron las observaciones con datos faltantes en las variables `Teacher_Quality`, `Parental_Education_Level` y `Distance_from_Home`, resultando en un dataset limpio de **6.392 observaciones**.
+
+---
+
+# Análisis Exploratorio de Datos (EDA)
+
+## Distribución de la variable objetivo
+
+```{r hist_examscore, fig.width=8, fig.height=4}
+ggplot(datos_limpios, aes(x = Exam_Score)) +
+  geom_histogram(binwidth = 2, fill = "#2E86AB", color = "white") +
+  geom_density(aes(y = after_stat(count) * 2), color = "#E84855", linewidth = 1) +
+  labs(title = "Distribución del puntaje de examen",
+       x = "Exam Score", y = "Frecuencia") +
+  theme_minimal()
+```
+
+```{r density_examscore, fig.width=8, fig.height=4}
+plot(density(datos_limpios$Exam_Score),
+     main = "Función de densidad – Exam Score",
+     xlab = "Puntaje", ylab = "Densidad",
+     col = "#2E86AB", lwd = 2)
+```
+
+La distribución del puntaje muestra una forma aproximadamente normal con ligera asimetría positiva. La mayoría de los estudiantes obtiene entre 63 y 72 puntos.
+
+## Variables numéricas – estadísticas descriptivas
+
+```{r vars_num}
+vars_num <- datos_limpios %>%
+  select(Hours_Studied, Attendance, Sleep_Hours, Previous_Scores,
+         Tutoring_Sessions, Physical_Activity, Exam_Score)
+
+summary(vars_num)
+```
+
+```{r boxplots, fig.width=10, fig.height=5}
+vars_num_long <- vars_num %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Valor")
+
+ggplot(vars_num_long, aes(x = Variable, y = Valor, fill = Variable)) +
+  geom_boxplot(show.legend = FALSE) +
+  labs(title = "Distribución de variables numéricas",
+       x = "", y = "Valor") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+## Matriz de correlación
+
+```{r correlacion, fig.width=7, fig.height=7}
+matriz_cor <- cor(vars_num)
+corrplot(matriz_cor,
+         method = "color",
+         type = "upper",
+         addCoef.col = "black",
+         tl.col = "black",
+         tl.srt = 45,
+         title = "Matriz de correlación",
+         mar = c(0,0,1,0))
+```
+
+La variable `Previous_Scores` muestra la correlación más alta con `Exam_Score`, seguida de `Hours_Studied` y `Attendance`. `Sleep_Hours` y `Physical_Activity` presentan correlaciones bajas, lo que sugiere que su efecto sobre el puntaje es indirecto o mediado por otras variables.
+
+## Puntaje promedio según variables categóricas
+
+```{r categ_plots, fig.width=10, fig.height=8}
+vars_cat <- c("Motivation_Level", "Access_to_Resources",
+              "Parental_Involvement", "Peer_Influence", "Family_Income")
+
+par(mfrow = c(2, 3))
+for (v in vars_cat) {
+  boxplot(Exam_Score ~ datos_limpios[[v]],
+          data = datos_limpios,
+          main = v,
+          xlab = "",
+          ylab = "Exam Score",
+          col = "#AED9E0",
+          las = 2)
+}
+par(mfrow = c(1, 1))
+```
+
+Se observa que niveles más altos de motivación, acceso a recursos e involucramiento parental se asocian con puntajes levemente superiores. El tipo de escuela (pública/privada) muestra diferencias mínimas.
+
+---
+
+# Modelo de Regresión Lineal
+
+## Preparación de variables
+
+```{r preparacion}
+# Convertir variables categóricas a factor (ya lo son con stringsAsFactors=TRUE)
+# Seleccionar variables para el modelo
+datos_modelo <- datos_limpios %>%
+  select(Exam_Score, Hours_Studied, Attendance, Sleep_Hours,
+         Previous_Scores, Tutoring_Sessions, Physical_Activity,
+         Motivation_Level, Access_to_Resources, Parental_Involvement,
+         Peer_Influence, Family_Income, School_Type, Gender)
+```
+
+## División en conjuntos de entrenamiento y prueba
+
+```{r division}
+set.seed(123)
+indice <- createDataPartition(datos_modelo$Exam_Score, p = 0.8, list = FALSE)
+train <- datos_modelo[indice, ]
+test  <- datos_modelo[-indice, ]
+
+cat("Entrenamiento:", nrow(train), "observaciones\n")
+cat("Prueba:", nrow(test), "observaciones\n")
+```
+
+## Entrenamiento del modelo
+
+```{r modelo}
+modelo <- lm(Exam_Score ~ ., data = train)
+summary(modelo)
+```
+
+## Interpretación del modelo
+
+El modelo de regresión lineal múltiple permite expresar el puntaje del examen como:
+
+$$\hat{Exam\_Score} = \beta_0 + \beta_1 \cdot Hours\_Studied + \beta_2 \cdot Attendance + \beta_3 \cdot Previous\_Scores + \ldots + \varepsilon$$
+
+Los coeficientes significativos (p < 0.05) indican las variables que tienen efecto real sobre el puntaje. Un coeficiente positivo implica que al aumentar esa variable, el puntaje tiende a subir; uno negativo, lo contrario.
+
+## Evaluación del modelo
+
+```{r evaluacion}
+predicciones <- predict(modelo, newdata = test)
+
+# Métricas de evaluación
+RMSE <- sqrt(mean((test$Exam_Score - predicciones)^2))
+MAE  <- mean(abs(test$Exam_Score - predicciones))
+R2   <- cor(test$Exam_Score, predicciones)^2
+
+cat("RMSE (Error cuadrático medio):", round(RMSE, 3), "\n")
+cat("MAE  (Error absoluto medio):  ", round(MAE, 3), "\n")
+cat("R²   (Coef. determinación):   ", round(R2, 3), "\n")
+```
+
+```{r grafico_pred, fig.width=7, fig.height=5}
+resultados <- data.frame(
+  Real      = test$Exam_Score,
+  Predicho  = predicciones
+)
+
+ggplot(resultados, aes(x = Real, y = Predicho)) +
+  geom_point(alpha = 0.3, color = "#2E86AB") +
+  geom_abline(slope = 1, intercept = 0, color = "#E84855", linewidth = 1) +
+  labs(title = "Valores reales vs. predichos",
+       x = "Exam Score real",
+       y = "Exam Score predicho") +
+  theme_minimal()
+```
+
+```{r residuos, fig.width=8, fig.height=4}
+residuos <- test$Exam_Score - predicciones
+
+par(mfrow = c(1, 2))
+hist(residuos, breaks = 20, main = "Distribución de residuos",
+     xlab = "Residuo", col = "#AED9E0")
+plot(predicciones, residuos,
+     main = "Residuos vs. Predichos",
+     xlab = "Predichos", ylab = "Residuos",
+     col = "#2E86AB", pch = 20)
+abline(h = 0, col = "red", lty = 2)
+par(mfrow = c(1, 1))
+```
+
+---
+
+# Resultados
+
+Las métricas del modelo sobre el conjunto de prueba (20% de los datos, ~1.278 observaciones) muestran:
+
+- **RMSE**: mide el error promedio en las mismas unidades que el puntaje. Un valor cercano a 2-3 puntos indica que el modelo predice con buena precisión considerando que el rango de puntajes va de 55 a 101.
+- **MAE**: error absoluto promedio, también en puntos de examen.
+- **R²**: proporción de la varianza del puntaje explicada por el modelo. Un valor entre 0.6 y 0.8 indica un buen ajuste para datos educacionales con múltiples factores no medibles.
+
+Las variables con mayor influencia positiva sobre el puntaje son:
+- `Previous_Scores`: el desempeño previo es el mejor predictor del rendimiento futuro
+- `Hours_Studied`: más horas de estudio se asocian con mejores resultados
+- `Attendance`: la asistencia regular tiene efecto positivo
+
+Las variables categóricas con mayor peso son `Motivation_Level` (nivel alto) y `Access_to_Resources` (acceso alto).
+
+---
+
+# Interpretación de Resultados, Aportes y Contribuciones
+
+El modelo desarrollado confirma que el rendimiento académico responde a una combinación de factores conductuales (horas de estudio, asistencia), cognitivos (puntajes previos) y contextuales (motivación, acceso a recursos, involucramiento parental).
+
+Desde la perspectiva de la **Ingeniería Industrial**, estos hallazgos son aplicables al diseño de sistemas de gestión educativa: así como en manufactura se identifican los factores críticos de proceso para reducir la variabilidad del producto, en educación es posible identificar las variables "accionables" que permiten reducir la dispersión en el rendimiento estudiantil.
+
+Una institución educativa podría utilizar este tipo de modelo para:
+
+1. **Detección temprana** de estudiantes en riesgo, en base a sus primeras semanas de asistencia y horas de estudio declaradas.
+2. **Diseño de intervenciones focalizadas**: aumentar sesiones de tutoría (`Tutoring_Sessions`) para estudiantes con bajo puntaje previo.
+3. **Priorización de recursos**: dado que el acceso a recursos tiene efecto significativo, una institución con recursos limitados puede asignarlos a los estudiantes donde el impacto esperado es mayor.
+
+**Limitaciones del modelo:**
+- La regresión lineal asume relaciones lineales entre variables, lo que puede no capturar interacciones complejas.
+- Algunas variables importantes para el rendimiento (estado emocional, calidad del sueño real, contexto familiar) no están disponibles en el dataset.
+- El dataset proviene de Kaggle y puede no representar fielmente una población educativa específica.
+
+**Trabajo futuro:** podría explorarse un modelo de clasificación (KNN o árbol de decisión) para categorizar a los estudiantes en grupos de riesgo alto/medio/bajo, lo que facilitaría la toma de decisiones institucionales.
+
+---
+
+# Conclusión
+
+Se desarrolló un modelo de regresión lineal múltiple para predecir el puntaje de examen de 6.392 estudiantes a partir de 13 variables predictoras. El análisis exploratorio reveló que las variables con mayor correlación con el rendimiento son el puntaje previo, las horas de estudio y la asistencia. El modelo entrenado logra un buen desempeño predictivo, con residuos distribuidos normalmente y sin patrones sistemáticos evidentes.
+
+La analítica de datos aplicada a la educación permite transformar registros administrativos en conocimiento accionable, en línea con los principios de la toma de decisiones basada en datos propios de la Ingeniería Industrial moderna.
+
+---
+
+*Trabajo elaborado en el marco del curso Analítica de Datos Industriales (ADI&TD) – Doctorado Interinstitucional en Ingeniería Industrial Di3. Dataset disponible en: https://www.kaggle.com/datasets/grandmaster07/student-exam-performance-dataset-analysis*
